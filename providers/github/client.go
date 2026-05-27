@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 
 	"github.com/boostsecurityio/poutine/analyze"
 	"github.com/boostsecurityio/poutine/providers/scm/domain"
@@ -391,23 +391,23 @@ func (c *Client) GetOrgRepos(ctx context.Context, org string) <-chan analyze.Rep
 			bo := backoff.NewExponentialBackOff()
 			bo.InitialInterval = 500 * time.Millisecond
 			bo.MaxInterval = 5 * time.Second
-			err := backoff.Retry(func() error {
+			_, err := backoff.Retry(ctx, func() (struct{}, error) {
 				queryErr := c.graphQLClient.Query(ctx, &query, variables)
 				if queryErr == nil {
-					return nil
+					return struct{}{}, nil
 				}
 				// Partial success: issues FORBIDDEN on some repos but main repo data is intact.
 				// The library unmarshals data before returning errors, so Repositories.Nodes
 				// is already populated. Accept the partial result.
 				if isIssuesPermissionError(queryErr) && query.RepositoryOwner.Login != "" {
-					return nil
+					return struct{}{}, nil
 				}
 				if !isRetryableError(queryErr) {
-					return backoff.Permanent(queryErr)
+					return struct{}{}, backoff.Permanent(queryErr)
 				}
 				log.Warn().Err(queryErr).Msg("retrying GitHub GraphQL query after transient error")
-				return fmt.Errorf("repo batch gql query failed: %w", queryErr)
-			}, backoff.WithContext(backoff.WithMaxRetries(bo, 5), ctx))
+				return struct{}{}, fmt.Errorf("repo batch gql query failed: %w", queryErr)
+			}, backoff.WithBackOff(bo), backoff.WithMaxTries(5))
 			if err != nil {
 				batchChan <- analyze.RepoBatch{Err: err}
 				consecutiveFailures++

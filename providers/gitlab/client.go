@@ -11,7 +11,7 @@ import (
 
 	"github.com/boostsecurityio/poutine/analyze"
 	"github.com/boostsecurityio/poutine/providers/scm/domain"
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/rs/zerolog/log"
 	"gitlab.com/gitlab-org/api/client-go"
 )
@@ -230,18 +230,18 @@ func (c *Client) ListGroupProjects(ctx context.Context, groupID string) <-chan a
 			bo := backoff.NewExponentialBackOff()
 			bo.InitialInterval = 500 * time.Millisecond
 			bo.MaxInterval = 5 * time.Second
-			err := backoff.Retry(func() error {
+			_, err := backoff.Retry(ctx, func() (struct{}, error) {
 				var apiErr error
 				ps, resp, apiErr = c.client.Groups.ListGroupProjects(groupID, opt)
 				if apiErr == nil {
-					return nil
+					return struct{}{}, nil
 				}
 				if !isRetryableGitLabError(apiErr) {
-					return backoff.Permanent(apiErr)
+					return struct{}{}, backoff.Permanent(apiErr)
 				}
 				log.Warn().Err(apiErr).Msg("retrying GitLab API call after transient error")
-				return fmt.Errorf("gitlab repo batch call failed: %w", apiErr)
-			}, backoff.WithContext(backoff.WithMaxRetries(bo, 5), ctx))
+				return struct{}{}, fmt.Errorf("gitlab repo batch call failed: %w", apiErr)
+			}, backoff.WithBackOff(bo), backoff.WithMaxTries(5))
 			if err != nil {
 				batchChan <- analyze.RepoBatch{Err: err}
 				consecutiveFailures++
